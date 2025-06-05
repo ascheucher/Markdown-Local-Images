@@ -61,7 +61,7 @@ Example
 
 ```bash
 python download_md_images.py ./blog-post.md
-
+```
 
 This will:
 
@@ -73,14 +73,14 @@ This will:
 
 The script processes Markdown files using the following workflow:
 
-1. Parses the Markdown content looking for image tags (!alt text)
-2. For each image with a remote URL:
+* Parses the Markdown content looking for image tags (!alt text)
+* For each image with a remote URL:
   * Downloads the image
   * Determines its dimensions using Pillow
   * Creates a filename based on alt text (if available) or URL
   * Saves the file to the local image directory
   * Updates the image reference in the document
-3. Saves a new Markdown file with updated references
+* Saves a new Markdown file with updated references
 
 ## Example Transformation
 
