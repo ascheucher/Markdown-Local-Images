@@ -2,7 +2,10 @@
 
 <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg">&nbsp;<img alt="Python 3.7+" src="https://img.shields.io/badge/python-3.7+-blue.svg">
 
-A Python utility that downloads remote images from Markdown files and replaces URLs with local references for offline viewing and improved portability.
+A Python utility that downloads remote images from Markdown files and replaces
+URLs with local references for offline viewing and improved portability.
+
+Folder and File names are optimized to work in **Obsidian**.
 
 ## Features
 
