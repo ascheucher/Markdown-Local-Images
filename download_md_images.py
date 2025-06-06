@@ -195,14 +195,24 @@ def setup_output_directory(file_path):
     # Use the full filename without the extension as the output directory name
     output_dir_name = file_name_without_ext
 
+    # Create the main output directory if it doesn't exist
     if not os.path.exists(output_dir_name):
         os.makedirs(output_dir_name)
         print(f"Created directory: {output_dir_name}")
 
-    return (
-        output_dir_name,
-        file_name_without_ext[:20],
-    )  # Return the directory name and the prefix for images
+    # Create a prefix for image filenames (first 20 characters)
+    image_prefix = file_name_without_ext[:20]
+    san_img_prefix = sanitize_filename(image_prefix)
+
+    # Create a nested images directory
+    images_dir_name = f"{san_img_prefix}-images"
+    images_dir_path = os.path.join(output_dir_name, images_dir_name)
+
+    if not os.path.exists(images_dir_path):
+        os.makedirs(images_dir_path)
+        print(f"Created images directory: {images_dir_path}")
+
+    return output_dir_name, image_prefix, images_dir_name
 
 
 def analyze_markdown_images(content):
@@ -221,7 +231,7 @@ def analyze_markdown_images(content):
 
 
 def handle_existing_image(
-    local_path, base_filename, file_extension, alt_text, output_dir_name
+    local_path, base_filename, file_extension, alt_text, images_dir_name
 ):
     """Handle case when image file already exists"""
     print(f"File already exists: {os.path.basename(local_path)}")
@@ -229,17 +239,19 @@ def handle_existing_image(
         img = Image.open(local_path)
         width, height = img.size
         new_filename = f"{base_filename}_{width}x{height}{file_extension}"
-        renamed_path = os.path.join(output_dir_name, new_filename)
+
+        # Get directory path and new full path
+        dir_path = os.path.dirname(local_path)
+        renamed_path = os.path.join(dir_path, new_filename)
 
         if local_path != renamed_path and not os.path.exists(renamed_path):
             os.rename(local_path, renamed_path)
 
-        # Return only the filename, not the path, since the markdown file
-        # will be in the same directory as the images
-        return f"![{alt_text}]({new_filename})"
+        # Return image reference that points to the nested images directory
+        return f"![{alt_text}]({images_dir_name}/{new_filename})"
     except Exception:
         # If we can't open the file, just use it as is
-        return f"![{alt_text}]({os.path.basename(local_path)})"
+        return f"![{alt_text}]({images_dir_name}/{os.path.basename(local_path)})"
 
 
 def get_max_path_length():
@@ -280,6 +292,7 @@ def process_single_image(
     match,
     output_dir_name,
     image_prefix,
+    images_dir_name,
     session,
     timeout,
     delay,
@@ -322,20 +335,23 @@ def process_single_image(
         if not base_filename or base_filename.endswith(f"_{file_extension}"):
             base_filename = f"{san_img_prefix}_image_{hash(image_url) % 10000}"
 
+    # Full path to the images directory (nested within output_dir_name)
+    images_dir_path = os.path.join(output_dir_name, images_dir_name)
+
     # Check if filename would be too long and get a safe filename
     base_filename = get_safe_filename(
-        output_dir_name, base_filename, file_extension, san_img_prefix
+        images_dir_path, base_filename, file_extension, san_img_prefix
     )
 
     # Download the image
     new_filename = f"{base_filename}{file_extension}"
-    local_path = os.path.join(output_dir_name, new_filename)
+    local_path = os.path.join(images_dir_path, new_filename)
 
     # Check if we already have this file
     if os.path.exists(local_path):
         return (
             handle_existing_image(
-                local_path, base_filename, file_extension, alt_text, output_dir_name
+                local_path, base_filename, file_extension, alt_text, images_dir_name
             ),
             None,
         )
@@ -354,7 +370,7 @@ def process_single_image(
                 new_filename_with_dims = (
                     f"{base_filename}_{width}x{height}{file_extension}"
                 )
-                renamed_path = os.path.join(output_dir_name, new_filename_with_dims)
+                renamed_path = os.path.join(images_dir_path, new_filename_with_dims)
 
                 # Check if the new path with dimensions would be too long
                 if len(renamed_path) >= get_max_path_length():
@@ -362,22 +378,22 @@ def process_single_image(
                     print(
                         f"Path with dimensions too long, keeping original filename: {new_filename}"
                     )
-                    # Since the file is in the same directory as the markdown now,
-                    # we don't need to include the directory in the path
-                    return f"![{alt_text}]({new_filename})", None
+                    # Update the image reference to point to the nested images directory
+                    return f"![{alt_text}]({images_dir_name}/{new_filename})", None
 
                 os.rename(local_path, renamed_path)
                 print(
                     f"Downloaded and saved: {new_filename_with_dims} ({width}x{height})"
                 )
-                # Since the file is in the same directory as the markdown now,
-                # we don't need to include the directory in the path
-                return f"![{alt_text}]({new_filename_with_dims})", None
+                # Update the image reference to point to the nested images directory
+                return (
+                    f"![{alt_text}]({images_dir_name}/{new_filename_with_dims})",
+                    None,
+                )
             else:
                 print(f"Downloaded and saved: {new_filename}")
-                # Since the file is in the same directory as the markdown now,
-                # we don't need to include the directory in the path
-                return f"![{alt_text}]({new_filename})", None
+                # Update the image reference to point to the nested images directory
+                return f"![{alt_text}]({images_dir_name}/{new_filename})", None
         else:
             # Return the original if download failed
             print(f"Failed to download: {image_url}")
@@ -395,9 +411,7 @@ def process_single_image(
 
 def process_markdown_file(file_path, timeout=10, delay=0.5):
     """Process markdown file to download remote images and update references"""
-    output_dir_name, image_prefix = setup_output_directory(
-        file_path
-    )  # Get both return values
+    output_dir_name, image_prefix, images_dir_name = setup_output_directory(file_path)
 
     # Read markdown content
     with open(file_path, "r", encoding="utf-8") as f:
@@ -417,7 +431,8 @@ def process_markdown_file(file_path, timeout=10, delay=0.5):
         result, failure = process_single_image(
             match,
             output_dir_name,
-            image_prefix,  # Pass the image prefix
+            image_prefix,
+            images_dir_name,
             session,
             timeout,
             delay,
