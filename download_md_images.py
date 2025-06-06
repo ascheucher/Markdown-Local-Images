@@ -311,19 +311,20 @@ def process_single_image(
         file_extension = ".jpg"  # Default extension
 
     # Create a filename from alt text or URL with the prefix
+    san_img_prefix = sanitize_filename(image_prefix)
     if alt_text:
-        base_filename = f"{image_prefix}_{sanitize_filename(alt_text)}"
+        base_filename = f"{san_img_prefix}_{sanitize_filename(alt_text)}"
     else:
         # Use the last part of the URL path as the filename with prefix
         base_filename = (
-            f"{image_prefix}_{sanitize_filename(os.path.basename(parsed_url.path))}"
+            f"{san_img_prefix}_{sanitize_filename(os.path.basename(parsed_url.path))}"
         )
         if not base_filename or base_filename.endswith(f"_{file_extension}"):
-            base_filename = f"{image_prefix}_image_{hash(image_url) % 10000}"
+            base_filename = f"{san_img_prefix}_image_{hash(image_url) % 10000}"
 
     # Check if filename would be too long and get a safe filename
     base_filename = get_safe_filename(
-        output_dir_name, base_filename, file_extension, image_prefix
+        output_dir_name, base_filename, file_extension, san_img_prefix
     )
 
     # Download the image
