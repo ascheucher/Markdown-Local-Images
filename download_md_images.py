@@ -183,29 +183,22 @@ def download_image(url, save_path, session=None, timeout=30):
         return False, (0, 0)
 
 
-def process_markdown_file(file_path, timeout=10, delay=0.5):
-    """Process markdown file to download remote images and update references"""
-    # Create output directory name based on first 15 chars of input file
+def setup_output_directory(file_path):
+    """Create output directory for downloaded images"""
     base_name = os.path.basename(file_path)
     file_name_without_ext = os.path.splitext(base_name)[0]
-    output_dir_name = f"{file_name_without_ext[:15]}-images"
+    output_dir_name = f"{file_name_without_ext}-images"
 
-    # Create output directory if it doesn't exist
     if not os.path.exists(output_dir_name):
         os.makedirs(output_dir_name)
         print(f"Created directory: {output_dir_name}")
 
-    # Read markdown content
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
+    return output_dir_name
 
-    # Find all image references using regex - handle slightly different markdown formats
+
+def analyze_markdown_images(content):
+    """Find and analyze image references in markdown content"""
     img_pattern = r"!\[(.*?)\]\((.*?)\)"
-
-    # Create a single session to use for all downloads
-    session = create_session_with_retries()
-
-    # Count images for progress reporting
     image_matches = re.findall(img_pattern, content)
     total_images = len(image_matches)
     remote_images = sum(
@@ -215,100 +208,204 @@ def process_markdown_file(file_path, timeout=10, delay=0.5):
     )
 
     print(f"Found {total_images} image references ({remote_images} remote)")
+    return img_pattern, image_matches, remote_images
+
+
+def handle_existing_image(
+    local_path, base_filename, file_extension, alt_text, output_dir_name
+):
+    """Handle case when image file already exists"""
+    print(f"File already exists: {os.path.basename(local_path)}")
+    try:
+        img = Image.open(local_path)
+        width, height = img.size
+        new_filename = f"{base_filename}_{width}x{height}{file_extension}"
+        renamed_path = os.path.join(output_dir_name, new_filename)
+
+        if local_path != renamed_path and not os.path.exists(renamed_path):
+            os.rename(local_path, renamed_path)
+
+        return f"![{alt_text}]({output_dir_name}/{new_filename})"
+    except Exception:
+        # If we can't open the file, just use it as is
+        return f"![{alt_text}]({os.path.basename(local_path)})"
+
+
+import uuid
+import os
+
+
+def get_max_path_length():
+    """Get maximum path length for the current OS"""
+    try:
+        # For Windows
+        if os.name == "nt":
+            return 260  # Windows MAX_PATH limit
+        # For macOS and Linux
+        else:
+            import pathconf
+
+            return os.pathconf("/", "PC_PATH_MAX")
+    except:
+        # If we can't determine, use a safe default
+        return 255  # A reasonable default for most systems
+
+
+def get_safe_filename(base_path, base_filename, file_extension):
+    """Generate a filename that does not exceed max path length"""
+    # Get max path length for current OS
+    max_path = get_max_path_length()
+
+    # Calculate full path length
+    full_path = os.path.join(base_path, f"{base_filename}{file_extension}")
+
+    # If path is too long, use UUID instead
+    if len(full_path) >= max_path:
+        # Generate a UUID and use that instead
+        uuid_name = str(uuid.uuid4())
+        print(f"Original filename too long, using UUID instead: {uuid_name}")
+        return uuid_name
+
+    return base_filename
+
+
+# Then update the process_single_image function to use this:
+def process_single_image(
+    match, output_dir_name, session, timeout, delay, processed_count, remote_images
+):
+    """Process a single image reference and download if needed"""
+    alt_text = match.group(1)
+    image_url = match.group(2).strip()
+
+    # If not a remote URL, return unmodified
+    if not (
+        image_url.startswith("http://")
+        or image_url.startswith("https://")
+        or image_url.startswith("ftp://")
+    ):
+        return match.group(0), None
+
+    processed_count += 1
+    print(
+        f"Processing image {processed_count}/{remote_images}: {alt_text or 'No alt text'}"
+    )
+
+    # Extract file extension from URL
+    parsed_url = urlparse(image_url)
+    path = parsed_url.path
+    file_extension = os.path.splitext(path)[1]
+    if not file_extension:
+        file_extension = ".jpg"  # Default extension
+
+    # Create a filename from alt text or URL
+    if alt_text:
+        base_filename = sanitize_filename(alt_text)
+    else:
+        # Use the last part of the URL path as the filename
+        base_filename = sanitize_filename(os.path.basename(parsed_url.path))
+        if not base_filename or base_filename == file_extension:
+            base_filename = f"image_{hash(image_url) % 10000}"
+
+    # Check if filename would be too long and get a safe filename
+    base_filename = get_safe_filename(output_dir_name, base_filename, file_extension)
+
+    # Download the image
+    new_filename = f"{base_filename}{file_extension}"
+    local_path = os.path.join(output_dir_name, new_filename)
+
+    # Check if we already have this file
+    if os.path.exists(local_path):
+        return (
+            handle_existing_image(
+                local_path, base_filename, file_extension, alt_text, output_dir_name
+            ),
+            None,
+        )
+
+    try:
+        success, (width, height) = download_image(
+            image_url, local_path, session, timeout
+        )
+
+        # Respect the delay setting
+        time.sleep(delay)
+
+        if success:
+            # Add dimensions to filename if we got them
+            if width > 0 and height > 0:
+                new_filename_with_dims = (
+                    f"{base_filename}_{width}x{height}{file_extension}"
+                )
+                renamed_path = os.path.join(output_dir_name, new_filename_with_dims)
+
+                # Check if the new path with dimensions would be too long
+                if len(renamed_path) >= get_max_path_length():
+                    # Keep the original filename without dimensions
+                    print(
+                        f"Path with dimensions too long, keeping original filename: {new_filename}"
+                    )
+                    return f"![{alt_text}]({output_dir_name}/{new_filename})", None
+
+                os.rename(local_path, renamed_path)
+                print(
+                    f"Downloaded and saved: {new_filename_with_dims} ({width}x{height})"
+                )
+                return (
+                    f"![{alt_text}]({output_dir_name}/{new_filename_with_dims})",
+                    None,
+                )
+            else:
+                print(f"Downloaded and saved: {new_filename}")
+                return f"![{alt_text}]({output_dir_name}/{new_filename})", None
+        else:
+            # Return the original if download failed
+            print(f"Failed to download: {image_url}")
+            return match.group(0), (alt_text, image_url)
+    except KeyboardInterrupt:
+        print("\nDownload interrupted by user. Saving progress...")
+        # Remove partial download if it exists
+        if os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+            except:
+                pass
+        raise
+
+
+def process_markdown_file(file_path, timeout=10, delay=0.5):
+    """Process markdown file to download remote images and update references"""
+    output_dir_name = setup_output_directory(file_path)
+
+    # Read markdown content
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Find and analyze all image references
+    img_pattern, image_matches, remote_images = analyze_markdown_images(content)
+
+    # Create a single session to use for all downloads
+    session = create_session_with_retries()
 
     processed_count = 0
     failed_downloads = []
 
     def replace_image(match):
         nonlocal processed_count
-        alt_text = match.group(1)
-        image_url = match.group(2).strip()
-
-        # If not a remote URL, return unmodified
-        if not (
-            image_url.startswith("http://")
-            or image_url.startswith("https://")
-            or image_url.startswith("ftp://")
-        ):
-            return match.group(0)
-
-        processed_count += 1
-        print(
-            f"Processing image {processed_count}/{remote_images}: {alt_text or 'No alt text'}"
+        result, failure = process_single_image(
+            match,
+            output_dir_name,
+            session,
+            timeout,
+            delay,
+            processed_count,
+            remote_images,
         )
 
-        # Extract file extension from URL
-        parsed_url = urlparse(image_url)
-        path = parsed_url.path
-        file_extension = os.path.splitext(path)[1]
-        if not file_extension:
-            file_extension = ".jpg"  # Default extension
+        if failure:
+            failed_downloads.append(failure)
 
-        # Create a filename from alt text or URL
-        if alt_text:
-            base_filename = sanitize_filename(alt_text)
-        else:
-            # Use the last part of the URL path as the filename
-            base_filename = sanitize_filename(os.path.basename(parsed_url.path))
-            if not base_filename or base_filename == file_extension:
-                base_filename = f"image_{hash(image_url) % 10000}"
-
-        # Download the image
-        new_filename = f"{base_filename}{file_extension}"
-        local_path = os.path.join(output_dir_name, new_filename)
-
-        # Check if we already have this file
-        if os.path.exists(local_path):
-            print(f"File already exists: {new_filename}")
-            # Try to get dimensions from existing file
-            try:
-                img = Image.open(local_path)
-                width, height = img.size
-                new_filename = f"{base_filename}_{width}x{height}{file_extension}"
-                renamed_path = os.path.join(output_dir_name, new_filename)
-
-                if local_path != renamed_path and not os.path.exists(renamed_path):
-                    os.rename(local_path, renamed_path)
-
-                return f"![{alt_text}]({output_dir_name}/{new_filename})"
-            except Exception:
-                # If we can't open the file, just use it as is
-                return f"![{alt_text}]({output_dir_name}/{new_filename})"
-
-        try:
-            success, (width, height) = download_image(
-                image_url, local_path, session, timeout
-            )
-
-            # Respect the delay setting
-            time.sleep(delay)
-
-            if success:
-                # Add dimensions to filename if we got them
-                if width > 0 and height > 0:
-                    new_filename = f"{base_filename}_{width}x{height}{file_extension}"
-                    renamed_path = os.path.join(output_dir_name, new_filename)
-                    os.rename(local_path, renamed_path)
-                    print(f"Downloaded and saved: {new_filename} ({width}x{height})")
-                    return f"![{alt_text}]({output_dir_name}/{new_filename})"
-                else:
-                    print(f"Downloaded and saved: {new_filename}")
-                    return f"![{alt_text}]({output_dir_name}/{new_filename})"
-            else:
-                # Track failed downloads
-                failed_downloads.append((alt_text, image_url))
-                # Return the original if download failed
-                print(f"Failed to download: {image_url}")
-                return match.group(0)
-        except KeyboardInterrupt:
-            print("\nDownload interrupted by user. Saving progress...")
-            # Remove partial download if it exists
-            if os.path.exists(local_path):
-                try:
-                    os.remove(local_path)
-                except:
-                    pass
-            raise
+        processed_count += 1
+        return result
 
     # Replace all image references
     print("Updating image references...")
@@ -321,6 +418,13 @@ def process_markdown_file(file_path, timeout=10, delay=0.5):
         updated_content = content
 
     # Save the modified markdown
+    save_output_file(file_path, updated_content, failed_downloads)
+
+    return output_dir_name
+
+
+def save_output_file(file_path, updated_content, failed_downloads):
+    """Save the updated markdown content to a new file"""
     output_file_path = os.path.splitext(file_path)[0] + "-localimg.md"
     with open(output_file_path, "w", encoding="utf-8") as f:
         f.write(updated_content)
