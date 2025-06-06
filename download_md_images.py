@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
-# filepath: /Users/admin/Downloads/how to blog post/download_md_images.py
 
 import argparse
 import os
 import re
 import requests
-from urllib.parse import urlparse
-from PIL import Image
-from io import BytesIO
-import unicodedata
 import string
 import sys
 import time
+import unicodedata
+import uuid
+from PIL import Image
+from io import BytesIO
+from urllib.parse import urlparse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 
 def sanitize_filename(filename):
     """Convert spaces and special chars to make a valid and safe filename"""
-    # Replace spaces with underscores and remove invalid filename characters
+    # First, replace spaces with underscores
+    filename = filename.replace(" ", "_")
+
+    # Then handle other invalid characters
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
     cleaned_name = (
         unicodedata.normalize("NFKD", filename)
         .encode("ASCII", "ignore")
         .decode("ASCII")
     )
+
+    # Replace any remaining spaces (that might have been introduced during normalization)
     return "".join(c for c in cleaned_name if c in valid_chars).replace(" ", "_")
 
 
@@ -187,13 +192,17 @@ def setup_output_directory(file_path):
     """Create output directory for downloaded images"""
     base_name = os.path.basename(file_path)
     file_name_without_ext = os.path.splitext(base_name)[0]
-    output_dir_name = f"{file_name_without_ext}-images"
+    # Use the full filename without the extension as the output directory name
+    output_dir_name = file_name_without_ext
 
     if not os.path.exists(output_dir_name):
         os.makedirs(output_dir_name)
         print(f"Created directory: {output_dir_name}")
 
-    return output_dir_name
+    return (
+        output_dir_name,
+        file_name_without_ext[:20],
+    )  # Return the directory name and the prefix for images
 
 
 def analyze_markdown_images(content):
@@ -225,14 +234,12 @@ def handle_existing_image(
         if local_path != renamed_path and not os.path.exists(renamed_path):
             os.rename(local_path, renamed_path)
 
-        return f"![{alt_text}]({output_dir_name}/{new_filename})"
+        # Return only the filename, not the path, since the markdown file
+        # will be in the same directory as the images
+        return f"![{alt_text}]({new_filename})"
     except Exception:
         # If we can't open the file, just use it as is
         return f"![{alt_text}]({os.path.basename(local_path)})"
-
-
-import uuid
-import os
 
 
 def get_max_path_length():
@@ -251,7 +258,7 @@ def get_max_path_length():
         return 255  # A reasonable default for most systems
 
 
-def get_safe_filename(base_path, base_filename, file_extension):
+def get_safe_filename(base_path, base_filename, file_extension, image_prefix=""):
     """Generate a filename that does not exceed max path length"""
     # Get max path length for current OS
     max_path = get_max_path_length()
@@ -259,19 +266,25 @@ def get_safe_filename(base_path, base_filename, file_extension):
     # Calculate full path length
     full_path = os.path.join(base_path, f"{base_filename}{file_extension}")
 
-    # If path is too long, use UUID instead
+    # If path is too long, use UUID instead with the image prefix
     if len(full_path) >= max_path:
-        # Generate a UUID and use that instead
-        uuid_name = str(uuid.uuid4())
+        # Generate a UUID and use that instead, but keep the prefix
+        uuid_name = f"{image_prefix}_{str(uuid.uuid4())}"
         print(f"Original filename too long, using UUID instead: {uuid_name}")
         return uuid_name
 
     return base_filename
 
 
-# Then update the process_single_image function to use this:
 def process_single_image(
-    match, output_dir_name, session, timeout, delay, processed_count, remote_images
+    match,
+    output_dir_name,
+    image_prefix,
+    session,
+    timeout,
+    delay,
+    processed_count,
+    remote_images,
 ):
     """Process a single image reference and download if needed"""
     alt_text = match.group(1)
@@ -297,17 +310,21 @@ def process_single_image(
     if not file_extension:
         file_extension = ".jpg"  # Default extension
 
-    # Create a filename from alt text or URL
+    # Create a filename from alt text or URL with the prefix
     if alt_text:
-        base_filename = sanitize_filename(alt_text)
+        base_filename = f"{image_prefix}_{sanitize_filename(alt_text)}"
     else:
-        # Use the last part of the URL path as the filename
-        base_filename = sanitize_filename(os.path.basename(parsed_url.path))
-        if not base_filename or base_filename == file_extension:
-            base_filename = f"image_{hash(image_url) % 10000}"
+        # Use the last part of the URL path as the filename with prefix
+        base_filename = (
+            f"{image_prefix}_{sanitize_filename(os.path.basename(parsed_url.path))}"
+        )
+        if not base_filename or base_filename.endswith(f"_{file_extension}"):
+            base_filename = f"{image_prefix}_image_{hash(image_url) % 10000}"
 
     # Check if filename would be too long and get a safe filename
-    base_filename = get_safe_filename(output_dir_name, base_filename, file_extension)
+    base_filename = get_safe_filename(
+        output_dir_name, base_filename, file_extension, image_prefix
+    )
 
     # Download the image
     new_filename = f"{base_filename}{file_extension}"
@@ -344,19 +361,22 @@ def process_single_image(
                     print(
                         f"Path with dimensions too long, keeping original filename: {new_filename}"
                     )
-                    return f"![{alt_text}]({output_dir_name}/{new_filename})", None
+                    # Since the file is in the same directory as the markdown now,
+                    # we don't need to include the directory in the path
+                    return f"![{alt_text}]({new_filename})", None
 
                 os.rename(local_path, renamed_path)
                 print(
                     f"Downloaded and saved: {new_filename_with_dims} ({width}x{height})"
                 )
-                return (
-                    f"![{alt_text}]({output_dir_name}/{new_filename_with_dims})",
-                    None,
-                )
+                # Since the file is in the same directory as the markdown now,
+                # we don't need to include the directory in the path
+                return f"![{alt_text}]({new_filename_with_dims})", None
             else:
                 print(f"Downloaded and saved: {new_filename}")
-                return f"![{alt_text}]({output_dir_name}/{new_filename})", None
+                # Since the file is in the same directory as the markdown now,
+                # we don't need to include the directory in the path
+                return f"![{alt_text}]({new_filename})", None
         else:
             # Return the original if download failed
             print(f"Failed to download: {image_url}")
@@ -374,7 +394,9 @@ def process_single_image(
 
 def process_markdown_file(file_path, timeout=10, delay=0.5):
     """Process markdown file to download remote images and update references"""
-    output_dir_name = setup_output_directory(file_path)
+    output_dir_name, image_prefix = setup_output_directory(
+        file_path
+    )  # Get both return values
 
     # Read markdown content
     with open(file_path, "r", encoding="utf-8") as f:
@@ -394,6 +416,7 @@ def process_markdown_file(file_path, timeout=10, delay=0.5):
         result, failure = process_single_image(
             match,
             output_dir_name,
+            image_prefix,  # Pass the image prefix
             session,
             timeout,
             delay,
@@ -417,15 +440,17 @@ def process_markdown_file(file_path, timeout=10, delay=0.5):
         # We'll still continue with the save
         updated_content = content
 
-    # Save the modified markdown
-    save_output_file(file_path, updated_content, failed_downloads)
+    # Save the modified markdown to the output directory
+    save_output_file(file_path, updated_content, output_dir_name, failed_downloads)
 
     return output_dir_name
 
 
-def save_output_file(file_path, updated_content, failed_downloads):
-    """Save the updated markdown content to a new file"""
-    output_file_path = os.path.splitext(file_path)[0] + "-localimg.md"
+def save_output_file(file_path, updated_content, output_dir_name, failed_downloads):
+    """Save the updated markdown content to a new file in the output directory"""
+    base_name = os.path.basename(file_path)
+    output_file_path = os.path.join(output_dir_name, base_name)
+
     with open(output_file_path, "w", encoding="utf-8") as f:
         f.write(updated_content)
 
