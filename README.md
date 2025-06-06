@@ -9,9 +9,9 @@ Folder and File names are optimized to work in **Obsidian**.
 
 ## Disclaimer
 
-This tool is vibe coded. It does what I want, don't judge me for the code quality.
+This tool is ✨ vibe coded ✨. It does what I want, don't judge me for the code quality.
 
-Otherwise AI will hunt you, when it takes over the world one day! ;)
+Otherwise AI will hunt you, when it takes over the world one day! 😬 🤖
 
 ## Features
 
